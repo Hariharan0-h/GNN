@@ -1,0 +1,25 @@
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Datasets auto-downloaded by torch_geometric (re-created on first run)
+data/Cora/
+data/DBLP/
+data/PubMed/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local secrets
+.env

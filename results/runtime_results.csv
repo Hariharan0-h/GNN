@@ -1,0 +1,4 @@
+Dataset,Nodes,Edges,Partitions,CommunicationEdges,NoAction,ThreadAdjust,Rebalance,PipelineTimeSec
+Cora,2708,5278,4,12,0,0,4,0.29922879999503493
+DBLP,4057,3528,4,12,0,0,4,0.3082862002775073
+PubMed,19717,44324,4,12,0,1,3,3.462096800096333
