@@ -1,0 +1,24 @@
+{
+  "coef": [
+    0.0009555871808393571,
+    3.764249174761081e-08,
+    1.5483054545476387e-07
+  ],
+  "r2_train": 0.949361747845619,
+  "r2_test": 0.9586686702565127,
+  "mape_test": 0.11937600351243466,
+  "reconfigure_s": 0.0013632499976665713,
+  "n_points": 240,
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "cpu_count": 12,
+    "python": "3.12.9",
+    "numpy": "1.26.4",
+    "scipy": "1.16.1",
+    "networkx": "3.5",
+    "numba": "0.66.0",
+    "torch": "2.8.0+cpu",
+    "torch_geometric": "2.8.1"
+  }
+}

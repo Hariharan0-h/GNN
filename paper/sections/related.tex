@@ -1,0 +1,35 @@
+\section{Related Work}
+
+\paragraph{Static and multilevel partitioning.}
+Kernighan--Lin \cite{kernighan1970} and Fiduccia--Mattheyses \cite{fiduccia1982} introduced
+move-based refinement. METIS \cite{karypis1998metis} and KaHIP \cite{sanders2013kahip} combine
+such refinement with coarsening and remain the standard for quality. Hendrickson and Kolda
+\cite{hendrickson2000models} showed that communication volume models parallel cost more
+accurately than edge cut, a distinction ACGR adopts. Exact methods \cite{bruglieri2025mingap}
+are too expensive at runtime.
+
+\paragraph{Streaming and dynamic repartitioning.}
+Streaming partitioners assign each vertex once, on arrival, using greedy scores: LDG
+\cite{stanton2012ldg}, FENNEL \cite{tsourakakis2014fennel}, and FREIGHT for hypergraphs
+\cite{eyubov2025freight}. Adaptive repartitioning trades quality against migration, through
+diffusion and scratch-remap for adaptive meshes
+\cite{schloegel2001wavefront,schloegel2000unified,damiand2024volume}, label-propagation
+refinement such as Spinner \cite{martella2017spinner}, or incremental GPU partitioning
+\cite{lee2025incremental}. Surveys \cite{dossantos2025landscape,zhang2026survey} name the
+balance between update cost and processing efficiency as a central open problem. These
+methods decide \emph{how} to repartition. GNN-AdaptGraph decides \emph{when} to adapt and
+chooses among adaptations of different cost, including thread reallocation, which migrates
+nothing.
+
+\paragraph{Learning-based partitioning and GNN systems.}
+Neural partitioners use bi-objective losses \cite{wei2025biobjective}, graph transformers
+\cite{yang2026anchoring}, permutation-invariant GNNs \cite{hevapathige2026permutation},
+co-clustering \cite{ragno2026coclustering}, agglomeration \cite{antonietti2025magnet}, or
+reinforcement learning \cite{cao2025ddqn}. They replace the partitioner, run offline, and
+ignore the cost of acting at runtime. Distributed GNN systems reduce communication with
+sparsity-aware exchange \cite{mukhopadhyay2024sparsity}, caching combined with resource-aware
+partitioning \cite{song2026capgnn}, non-uniform partitioning for heterogeneous GPUs
+\cite{wang2025nugnn}, streaming partitioning \cite{mu2023streaming}, partitioning-free training
+\cite{farkas2026softpart}, temporal sampling \cite{deng2024taser}, or hardware support
+\cite{zhang2026nm,sahebi2025hashgrid}. These systems fix the configuration up front, whereas
+we adapt it during execution.

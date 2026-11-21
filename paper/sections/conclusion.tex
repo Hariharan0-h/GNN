@@ -1,0 +1,17 @@
+\section{Conclusion}
+We revised GNN-AdaptGraph into a cost-explicit adaptive runtime for partition-parallel
+processing of dynamic graphs and evaluated it on real execution with established baselines.
+Thread reallocation, implemented for real, is the most effective adaptation for
+activity-driven imbalance. ACGR, with a communication-volume objective and an explicit balance
+constraint, repairs degraded partitions far better than label propagation on sparse graphs.
+A GraphSAGE controller trained on outcome-based labels makes better per-decision choices than
+a tuned rule. End to end, however, it performs on par with simple heuristics. In particular,
+it does not learn when global repartitioning pays off under steady drift, where periodic
+METIS remains best. The honest takeaway is a hybrid: a cheap thread-adjustment trigger
+combined with drift-triggered global repartitioning. Learning the latter reliably is
+the open problem.
+
+Future work will address this gap with longer-horizon objectives (e.g.\ reinforcement
+learning over whole streams), training on recorded traces of the target workload, and features
+that estimate the benefit of repartitioning cheaply. We will also evaluate on a real
+distributed cluster with larger graphs.

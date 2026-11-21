@@ -1,0 +1,141 @@
+\section{Results}\label{sec:results}
+
+\subsection{Executor and Cost Model (E4)}
+Thread adjustment acts on real parallelism. One partition reaches a speedup of \SpeedupSix{}
+on the 6 physical cores and \SpeedupMax{} at \SpeedupMaxThreads{} threads, with no further
+gain from simultaneous multithreading (\SpeedupTwelve{} at 12 threads). The cost
+model~\eqref{eq:cost}, fitted on \CalPoints{} measured configurations, predicts held-out
+configurations with $R^2=\CalRtwo$ and a mean absolute percentage error of \CalMape\%. This is
+accurate enough to rank actions for the oracle labels. All headline results below use measured
+time, not the model. The speedup curve and the fit are plotted in the artefact.
+
+
+\subsection{Static Partition Quality (E1)}
+Table~\ref{tab:e1} separates ACGR's contribution from that of the initial partitioner.
+\begin{itemize}
+  \item \emph{Repairing degraded partitions.} A partitioning that has absorbed many updates
+        resembles a streaming (LDG) one. From LDG starts, ACGR reduces the edge cut by
+        \EOnePubLDGCutRed\% on PubMed and \EOneCoraLDGCutRed\% on Cora (LP:
+        \EOnePubLDGLPRed\% and \EOneCoraLDGLPRed\%). It obtains the lowest cut and CV of all
+        refiners on the sparse graphs while staying within the 3\% balance tolerance.
+  \item \emph{The CV term matters.} The cut-only ablation is no better than LP. The full
+        objective lowers both CV and the cut.
+  \item \emph{From METIS starts,} ACGR mainly trades cut for communication: CV falls by
+        \EOnePubMetisCVRed\% on PubMed (cut change \EOnePubMetisCutRed\%).
+  \item \emph{Limits.} METIS from scratch remains far better and is fast (\EOnePubMetisMs\,ms on
+        PubMed). On the dense, power-law sx-mathoverflow graph, all local refiners gain little
+        (\EOneMathLDGCutRed\% for ACGR from LDG). ACGR takes \EOnePubAcgrMs\,ms (PubMed, $k=8$),
+        more than LP but small compared with an execution window.
+\end{itemize}
+Our first version reported a one-edge gain on Cora (744$\to$743). Its ACGR started from
+Kernighan--Lin and penalised every imbalance. With the balance constraint and the CV term,
+the same start yields the KL/ACGR rows of Table~\ref{tab:e1}.
+
+\begin{table}[t]
+\centering
+\caption{Static partition quality, $k=8$, mean over 5 seeds: edge cut (\% of $|E|$),
+communication volume (CV) and refinement time (ms).}\label{tab:e1}
+\IfFileExists{tables/e1_quality_k8.tex}{\resizebox{\linewidth}{!}{\input{tables/e1_quality_k8}}}{\RES{table missing}}
+\end{table}
+
+\subsection{Controller Quality (E2)}
+The \NumSamples{} labelled states split into \LabelNO\% \NOA{}, \LabelTA\% \TA{}, \LabelRB\%
+\RB{} and \LabelRP\% \RP{}. Table~\ref{tab:e2} reports decision quality on the
+\NumTest{} test states from \NumTestGraphs{} unseen streams.
+\begin{itemize}
+  \item \emph{Learned versus rule-based.} The learned controllers reduce regret by about a
+        quarter compared with the tuned threshold rule: GraphSAGE $\GSregret\pm\GSregretStd$\%,
+        MLP $\MLPregret\pm\MLPregretStd$\%, threshold \THregret\%, never adapting \NOregret\%,
+        always adjusting threads \TAallregret\%. Their macro-F1 is also higher (\GSFOne{} vs.\
+        \THFOne). Always rebalancing (\RBallregret\%) or repartitioning (\RPallregret\%) is far
+        worse, so firing the expensive actions at the wrong time is costly.
+  \item \emph{What is learned.} Grid search sets the threshold rule's drift threshold to
+        $\infty$, so it never rebalances. The GraphSAGE controller selects \RB{} in \GSPredRB\%
+        of the states, with \GSRBprec\% precision and \GSRBrecall\% recall (Fig.~\ref{fig:e2}a).
+        It never selects \RP{}: in \GSRPasRB\% of the states where global repartitioning is
+        optimal, it chooses the cheaper local repair instead, which is a conservative choice
+        given that a mistaken \RP{} costs \RPallregret\% on average. In the first iteration,
+        trained without interaction streams, the controller selected neither \RB{} nor \RP{}
+        (Sect.~\ref{sec:setup}). Selecting \RB{} on synthetic test states does not yet carry over
+        to the real stream (E3).
+  \item \emph{Ablations.} Message passing helps little: GraphSAGE and the MLP reach the same
+        regret. With $k\le 8$, the communication graph is small and nearly complete, so pooling
+        already exposes most of the information. Class-weighted cross-entropy performs
+        similarly to the cost-sensitive loss ($\CEregret\pm\CEregretStd$\%).
+\end{itemize}
+
+\begin{figure}[t]
+\centering
+\IfFileExists{figs/e2_controller.pdf}{\includegraphics[width=\linewidth]{figs/e2_controller.pdf}}{\RES{figure missing}}
+\caption{(a) Test confusion matrix of the GraphSAGE controller (NO: \NOA{}, TA: \TA{}, RB:
+\RB{}, RP: \RP{}). (b) Loss curves of GraphSAGE and MLP (seed 0).}\label{fig:e2}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Decision quality on held-out test graphs (mean $\pm$ std over 3 seeds). Regret is the
+extra look-ahead cost $J_H(a)/J_H(a^\star)-1$ of the chosen action. Cost ratio is
+$\sum J_H(a)/\sum J_H(a^\star)$.}\label{tab:e2}
+\scriptsize
+\IfFileExists{tables/e2_controller.tex}{\input{tables/e2_controller}}{\RES{table missing}}
+\end{table}
+
+\subsection{End-to-End Performance on Dynamic Graphs (E3)}
+Table~\ref{tab:e3} reports measured end-to-end times on \NumScenarios{} scenarios
+(2 streams $\times$ 2 values of $k$ $\times$ 3 platforms).
+\begin{enumerate}
+  \item \emph{Which adaptation pays depends on the workload.} On the hotspot-driven PubMed
+        streams, thread reallocation gives the largest gains: Always-\TA{} is up to
+        \SpPubEightSmAlwaysTA$\times$ faster than Static ($k=8$, SM), whereas periodic METIS is
+        slower than Static (\SpPubEightSmPMETIS$\times$) because it migrates many vertices for
+        little structural gain. On the steadily drifting real stream, periodic global
+        repartitioning is the best deployable policy (\SpMathFourOnePMETIS$\times$ at $k=4$ on
+        1\,GbE; Oracle \SpMathFourOneOracle$\times$), and thread reallocation adds little
+        (\SpMathFourOneAlwaysTA$\times$).
+  \item \emph{The learned controllers perform on par with simple heuristics, not better.}
+        No fixed heuristic is best everywhere: periodic METIS is up to \RobPMETISMax\% and
+        Always-\TA{} up to \RobAlwaysTAMax\% behind the best deployable policy of a scenario.
+        GraphSAGE is behind by \RobGSAGEMean\% on average (worst case \RobGSAGEMax\%), slightly
+        more than Always-\TA{} (\RobAlwaysTAMean\%) and the threshold rule
+        (\RobThresholdMean\%), and similar to the MLP (\RobMLPMean\%). It beats Static in
+        \FasterGSAGE{} of the \NumScenarios{} scenarios, significantly in \SigFasterGSAGE{}. On
+        the real stream at $k=8$, all thread-adjusting policies are marginally slower than
+        Static. Its controller overhead is \CtrlGSAGE\% of the total time, and it is not the
+        best policy in any scenario.
+  \item \emph{The gap to the Oracle is global repartitioning.} On sx-mathoverflow the Oracle
+        chooses \RB{} \MathRBOracle{} times and \RP{} \MathRPOracle{} times. The learned
+        controllers trigger neither action on the evaluation streams, although they select \RB{}
+        on synthetic test states (E2).
+  \item \emph{Speculative or unconditional repartitioning does not pay.} MPC must run ACGR and
+        METIS in every window to evaluate them, and is slower than Static in every scenario
+        (e.g.\ \SpPubEightSmMPC$\times$). This is the main argument for a millisecond-scale
+        learned or rule-based trigger. Always-ACGR is slower than Static except on the real
+        stream with $k=4$ on 1\,GbE (\SpMathFourOneAlwaysACGR$\times$).
+\end{enumerate}
+
+\begin{table}[t]
+\centering
+\caption{End-to-end time $J$ (s): sum of per-window median times plus overheads (mean over
+seeds for PubMed). Bold: best deployable policy. $^{*}$: $p<0.05$ versus Static (paired
+Wilcoxon on per-window times, all seeds).}\label{tab:e3}
+\IfFileExists{tables/e3_totals.tex}{\resizebox{\linewidth}{!}{\input{tables/e3_totals}}}{\RES{table missing}}
+\end{table}
+
+\subsection{Discussion and Recommendations}
+\begin{itemize}
+  \item \emph{Transient imbalance} (hotspots) is best handled by thread reallocation. It
+        costs about a millisecond, migrates nothing, and should be applied whenever thread
+        pressure is uneven. Learned and rule-based triggers both do this reliably.
+  \item \emph{Persistent structural drift} requires repartitioning. ACGR repairs sparse graphs
+        cheaply (E1). On the dense real stream only global repartitioning helps, and it pays off
+        on all three platforms.
+  \item \emph{Learned control} has the lowest per-decision regret, but end to end it matches
+        simple heuristics and does not exploit repartitioning on the evaluation streams. Our
+        practical recommendation is a cheap thread-adjustment trigger combined with periodic or
+        drift-triggered global repartitioning. Learning \emph{when to repartition globally}
+        remains open: on the real stream GraphSAGE is up to \RobOracleGap\% slower than the
+        Oracle.
+\end{itemize}
+\paragraph{Limitations.} We measure on one 6-core laptop and emulate networks analytically.
+The cost model must be recalibrated for each machine, and the look-ahead assumes \NOA{} after
+the first action. The dynamic experiments use one real temporal graph and $k\le 8$.

@@ -1,0 +1,6 @@
+{
+  "drift_th": Infinity,
+  "pressure_th": 1.5207726496458054,
+  "comm_th": 0.0038537464570254087,
+  "train_mean_regret": 0.0071976537158533775
+}

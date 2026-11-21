@@ -1,0 +1,83 @@
+\section{Experimental Setup}\label{sec:setup}
+
+\paragraph{Hardware and software.}
+All experiments run on one laptop: AMD Ryzen~5 5600H (6 cores, 12 hardware threads), 8\,GB RAM,
+Windows~11. We use Python 3.12, NumPy 1.26, Numba 0.66 \cite{lam2015numba}, PyTorch 2.8, PyTorch
+Geometric 2.8 \cite{fey2019pyg}, NetworkX 3.5 and METIS 5 (pymetis). The thread budget is
+$T_{\mathrm{thr}}=12$, with $S=20$ supersteps per window and $F=64$. Code, seeds and the scripts
+that regenerate every table and figure are released with the paper.
+
+\paragraph{Datasets.}
+Table~\ref{tab:datasets} lists the graphs. Static partition quality is measured on Cora and
+PubMed \cite{sen2008collective,yang2016planetoid}, on DBLP co-authorship, and on the union of all
+sx-mathoverflow edges. The dynamic experiments use two streams:
+\begin{itemize}
+  \item the \emph{real} temporal stream sx-mathoverflow \cite{paranjape2017motifs}, with
+        \MathInteractions{} timestamped interactions (self-loops removed) over \MathYears{} years.
+        The first half of the interactions builds the initial graph; the rest is split into
+        30 windows. An edge expires after a quarter of the time span without interaction, so the
+        graph both grows and shrinks;
+  \item \emph{synthetic} streams on PubMed, driven by a Markov chain over three regimes: quiet
+        (background activity only), hotspot (60\% of one community becomes active) and drift (a
+        quarter of a community rewires to another one), plus preferential-attachment growth.
+\end{itemize}
+Neither stream, and neither of their base graphs, is used for training.
+
+\begin{table}[t]
+\centering
+\caption{Graphs and streams. Dynamic streams have 30 windows; $|A_t|/|V|$ is the mean active fraction.}\label{tab:datasets}
+\IfFileExists{tables/datasets.tex}{\input{tables/datasets}}{\RES{table missing}}
+\end{table}
+
+\paragraph{Baselines.}
+\emph{Static partitioning:} METIS \cite{karypis1998metis}, recursive Kernighan--Lin (KL)
+\cite{kernighan1970}, LDG \cite{stanton2012ldg}, FENNEL \cite{tsourakakis2014fennel} and
+random hashing. Each is combined with no refinement, with label-propagation refinement (LP, as
+in Spinner \cite{martella2017spinner}), with ACGR, and with a cut-only ACGR ablation.
+\emph{Dynamic policies:}
+\begin{itemize}
+  \item \emph{Static}: the initial METIS partition plus LDG placement, with no adaptation;
+  \item \emph{Always-TA} and \emph{Always-ACGR};
+  \item \emph{Periodic-METIS}: scratch-remap every 5 windows \cite{schloegel2000unified};
+  \item \emph{Threshold}: a rule on the same features (drift $\to$ \RB{}/\RP{}, thread
+        pressure $\to$ \TA{}) whose three thresholds are grid-searched on the training data;
+  \item \emph{MPC}: model-predictive control with the cost model and a persistence forecast.
+        The time it spends running ACGR and METIS speculatively is charged as overhead;
+  \item the \emph{MLP} ablation;
+  \item the look-ahead \emph{Oracle}. It sees future windows, so it is an upper bound and cannot
+        be deployed.
+\end{itemize}
+
+\paragraph{Controller training.}
+The training data are 450 synthetic streams of 16 windows each:
+\begin{itemize}
+  \item 300 \emph{regime streams} on stochastic block models, Holme--Kim power-law cluster
+        graphs, random geometric graphs and Watts--Strogatz graphs with 3k--25k vertices;
+  \item 150 \emph{interaction streams} from a generative model of growing interaction graphs.
+        New vertices join topics whose popularity drifts. Interactions follow
+        recency-weighted preferential attachment, triadic closure and topic homophily. The
+        events are windowed with edge expiry exactly like the real stream.
+\end{itemize}
+In a first iteration we trained on regime streams only, and the controller never learned to
+repartition: steady, growth-driven drift, which is typical of interaction graphs, was absent
+from that data. We therefore added the second family. Its generator follows general properties
+of temporal networks and was not fitted to sx-mathoverflow. The first-iteration results are
+kept in the artefact.
+
+Platform (SM, 10\,GbE, 1\,GbE), $k\in\{4,8\}$ and the stream parameters are randomised.
+Samples are split 70/15/15 \emph{by stream}. Training uses AdamW (learning rate $10^{-3}$,
+weight decay $10^{-4}$), batch size 64 and loss~\eqref{eq:loss}, reduces the learning rate on
+plateaus (factor 0.5, patience 10), and stops early on validation regret (patience 30, at most
+300 epochs). Each controller is trained with three seeds. E3 uses the seed-0 models, fixed
+before evaluation.
+
+\paragraph{Protocol and statistics.}
+For each stream, $k\in\{4,8\}$ and platform, every policy first runs through the stream, and
+its decisions and overheads are recorded. Then, for every window, each distinct configuration
+(assignment and threads) is executed 10 times on the real executor, with policies interleaved
+in random order. A window's execution time is the median of its 10 repetitions, because the
+8\,GB machine occasionally stalls a run through paging. We report the number of outlier runs,
+i.e.\ runs taking more than three times the window median. $J$~\eqref{eq:J} sums over windows.
+Its 95\% CI is obtained by bootstrapping the repetitions of each window (1{,}000 resamples), and
+synthetic streams are averaged over 3 seeds. Significance against Static is tested with a
+paired Wilcoxon signed-rank test on per-window times.

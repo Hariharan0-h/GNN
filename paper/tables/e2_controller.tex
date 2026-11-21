@@ -1,0 +1,13 @@
+\begin{tabular}{lcccc}
+\toprule
+Controller & Accuracy & Macro-F1 & Regret (\%) & Cost ratio \\
+\midrule
+GraphSAGE & 0.720 $\pm$ 0.011 & 0.469 $\pm$ 0.009 & 0.69 $\pm$ 0.07 & 1.0058 \\
+MLP & 0.720 $\pm$ 0.002 & 0.453 $\pm$ 0.007 & 0.69 $\pm$ 0.02 & 1.0060 \\
+Threshold (tuned) & 0.658 & 0.312 & 0.91 & 1.0079 \\
+Never adapt & 0.638 & 0.195 & 1.20 & 1.0091 \\
+Always \TA{} & 0.222 & 0.091 & 1.16 & 1.0086 \\
+Always \RB{} & 0.093 & 0.042 & 8.51 & 1.0355 \\
+Always \RP{} & 0.048 & 0.023 & 17.93 & 1.0859 \\
+\bottomrule
+\end{tabular}

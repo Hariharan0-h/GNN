@@ -1,0 +1,69 @@
+{
+  "cora": {
+    "n": 2708,
+    "m": 5278,
+    "isolated": 0,
+    "avg_degree": 3.8980797636632203
+  },
+  "pubmed": {
+    "n": 19717,
+    "m": 44324,
+    "isolated": 0,
+    "avg_degree": 4.496018664096972
+  },
+  "dblp": {
+    "n": 4057,
+    "m": 3528,
+    "isolated": 1466,
+    "avg_degree": 1.739216169583436
+  },
+  "sx-mathoverflow": {
+    "n": 24759,
+    "m": 187986,
+    "isolated": 0,
+    "avg_degree": 15.185265963891919
+  },
+  "sx-mathoverflow-stream": {
+    "interactions": 390441,
+    "vertices": 24759,
+    "span_days": 2350.3325925925924,
+    "span_years": 6.4348599386518615,
+    "initial_n": 10958,
+    "initial_m": 56928,
+    "final_n": 24759,
+    "final_m": 41936,
+    "mean_active": 0.49136821026988725,
+    "min_m": 41604,
+    "max_m": 55560
+  },
+  "pubmed-synth-0": {
+    "final_n": 21556,
+    "final_m": 52545,
+    "mean_active": 0.09250977780482567,
+    "regimes": {
+      "quiet": 17,
+      "drift": 2,
+      "hotspot": 11
+    }
+  },
+  "pubmed-synth-1": {
+    "final_n": 21556,
+    "final_m": 53042,
+    "mean_active": 0.10504023642251628,
+    "regimes": {
+      "quiet": 8,
+      "drift": 10,
+      "hotspot": 12
+    }
+  },
+  "pubmed-synth-2": {
+    "final_n": 21556,
+    "final_m": 53338,
+    "mean_active": 0.08605666338678115,
+    "regimes": {
+      "quiet": 5,
+      "drift": 23,
+      "hotspot": 2
+    }
+  }
+}

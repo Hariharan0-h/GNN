@@ -1,156 +1,118 @@
 # GNN-AdaptGraph: Project Context & Handoff
 
-This document is for whoever picks up this project next. It covers what the project is, how the code fits together, how to run it, where it currently stands, and what is known to be broken or unfinished.
+Read this first if you are picking up the project. It covers what the system does, how the
+code fits together, how to reproduce the paper, and what is known to be limited. The
+quick-start is in `README.md`.
 
-The research write-up is in the repo:
-`GNN_AdaptGraph__Adaptive_Graph_Runtime_Optimization_Using_GraphSAGE_and_Communication_Aware_Repartitioning (1).pdf`
-(Figures `figure1.png` to `figure5.png` belong to it.)
+## 1. History: why the code was rewritten
 
----
+The first version (paper 177, 5CSCT 2026) was reviewed in November 2026. Reviewer #2's
+concerns were confirmed by reading the code:
 
-## 1. What the project does
+| Original claim | What the code actually did |
+|---|---|
+| Speedups of 1.04× / 1.16× / 0.80× | `runtime/execution_engine.py` ignored the actions. The differences were sub-millisecond noise from a single run. |
+| "ACGR overhead caused the PubMed slowdown" | ACGR never ran on PubMed (the controller chose NO_ACTION), and its time was not measured. |
+| A boundary-communication term in ACGR | It always equalled 2 × edge cut, so it duplicated the cut term. |
+| A reward-driven GraphSAGE policy | The model imitated the hand-written rule in `runtime/decision_engine.py`. |
+| THREAD_ADJUST | Not implemented. |
+| ACGR improves partitions | It started from KL partitions and penalised all imbalance, so it got stuck after one edge on Cora. |
 
-GNN-AdaptGraph is a **runtime controller for partitioned graph processing**. A large graph is split into partitions. A GraphSAGE model looks at those partitions and decides, for each one, which runtime adaptation to apply:
+The revision (branch `revision-5csct`) replaces all of this. The old modules
+(`runtime/execution_engine.py`, `runtime/decision_engine.py`, `gnn/model.py`,
+`monitor/feature_extractor.py`, the root `test_*.py` scripts, `run_*.py`) are kept only for
+reference. None of the new experiments uses them.
 
-| Label | Action          | Meaning                                         |
-|-------|-----------------|-------------------------------------------------|
-| 0     | `NO_ACTION`     | Partition is healthy                            |
-| 1     | `THREAD_ADJUST` | Moderate imbalance; change parallelism          |
-| 2     | `REBALANCE`     | Strong imbalance; repartition (ACGR)            |
+## 2. What the system does now
 
-When the controller asks for `REBALANCE`, **ACGR** (Adaptive Cost-Aware Graph Repartitioning, `runtime/acgr.py`) greedily moves boundary nodes between partitions. It accepts a move only if the move lowers a weighted cost made up of edge-cut, boundary communication, load imbalance and degree skew.
+The system is an adaptive runtime for partition-parallel GNN inference on **dynamic graphs**.
+In every window:
 
-### End-to-end pipeline (inference)
+1. **Ingest** (`runtime/environment.py`): apply the window's edge and vertex changes. New
+   vertices are placed with LDG.
+2. **Observe**: build 8 partition features, 3 global features and the communication graph.
+   One node represents one partition; an edge joins two partitions that share cut edges.
+3. **Decide** (`controller/policies.py`, `gnn/controller_model.py`): pick
+   NO_ACTION / THREAD_ADJUST / REBALANCE (ACGR) / REPARTITION (METIS scratch-remap).
+4. **Apply**: thread reallocation, ACGR, or METIS. Overheads and migration are recorded.
+5. **Execute** (`runtime/bsp_executor.py`): run S = 20 supersteps of a GraphSAGE-style layer on
+   the active vertices. Each partition has its own thread pool, the kernels are numba kernels
+   that release the GIL, and the halo exchange sends only the active ghosts.
 
-```
-NetworkX graph (Cora / DBLP / PubMed / synthetic)
-   │
-   ▼  graph/partition_manager.py      recursive Kernighan-Lin bisection → 4 partitions
-   │
-   ▼  monitor/feature_extractor.py    8 features per partition
-   │
-   ▼  graph/communication_graph.py    "communication graph": 1 node per partition,
-   │                                  edge = cross-partition edges (weight = count)
-   │                                  → torch_geometric Data(x=[4,8], edge_index, edge_attr)
-   ▼  controller/runtime_controller.py  GraphSAGE → action per partition
-   │
-   ▼  runtime/acgr.py                 (only if REBALANCE) refine partitions
-   │
-   ▼  runtime/execution_engine.py     traverse partitions, measure time/throughput
-```
+**Platforms.** On `sm`, time is fully measured. `10g` and `1g` add an emulated network
+charge for the halo exchange and for migration (`NETWORKS` in `runtime/environment.py`).
 
-`controller/runtime_pipeline.py` (`RuntimePipeline`) runs the first four steps in one call.
+**Controller training** (`gnn/oracle_labels.py`, `gnn/train_controller.py`):
+- Labels come from an oracle that evaluates all 4 actions over an 8-window look-ahead on the
+  calibrated cost model (`CostModel`, `results/cost_model.json`).
+- The loss is the expected regret plus 0.1 × cross-entropy.
+- The data are synthetic training graphs only. The split is by graph instance.
 
-### The 8 partition features (`monitor/feature_extractor.py`)
-
-1. Degree skewness  2. Load-imbalance ratio  3. Avg clustering coeff  4. Edge density
-5. Avg degree  6. Partition size ratio  7. Boundary edge count  8. Edge-cut ratio
-
-### How the model is trained
-
-- **Data:** `data/synthetic.py` makes random ER, BA or WS graphs with 100 to 300 nodes. `gnn/dataset_builder.py` builds N of them (default 5000; `test_training.py` uses 500).
-- **Per graph:** `gnn/graph_dataset.py` partitions it into 4 parts, extracts features and builds the communication graph.
-- **Labels** come from the rule-based teacher `runtime/decision_engine.py`:
-  `score = 0.40·|skew| + 0.30·imbalance + 0.20·density + 0.10·clustering`, with `≥0.75 → REBALANCE`, `≥0.45 → THREAD_ADJUST`, otherwise `NO_ACTION`.
-  **The GraphSAGE model therefore learns to imitate the rule-based engine.** Keep this in mind when you interpret "GraphSAGE vs Rule-Based" comparisons.
-- **Model** (`gnn/model.py`): 2× SAGEConv (8→64→64) with BatchNorm, a residual connection, then an MLP head (64→32→3).
-- **Trainer** (`gnn/train.py`): AdamW, class-weighted cross-entropy, ReduceLROnPlateau, early stopping (patience 15), 80/10/10 split. Saves the best model to `gnn/checkpoints/best_graphsage_model.pth`.
-- **Last recorded test metrics** (`model_metrics.json`): accuracy 0.875, F1 0.868. The `THREAD_ADJUST` class is weak: only 6 of 21 were classified correctly (see the confusion matrix).
-
----
-
-## 2. Repository layout
+## 3. Key modules
 
 ```
-controller/   runtime_controller.py (loads checkpoint, predicts actions)
-              runtime_pipeline.py   (partition → features → comm graph → predict)
-gnn/          model.py, train.py, evaluate.py, dataset_builder.py, graph_dataset.py,
-              graph_loader.py, preprocessing.py, inference.py, checkpoint.py, graphsage.py
-gnn/datasets/ cora.py, dblp.py, pubmed.py, twitter.py   (all return a NetworkX graph)
-gnn/checkpoints/ best_graphsage_model.pth  ← checkpoint used by every experiment script
-                 best_model.pth
-graph/        partition_manager.py, communication_graph.py, feature_extractor.py, graph_builder.py
-monitor/      feature_extractor.py (the 8 features), partition_metrics.py, graph_monitor.py
-runtime/      acgr.py, decision_engine.py (rule teacher), execution_engine.py, executor.py,
-              partition_manager.py, partition_graph.py, rebalance.py, double_buffer.py
-evaluation/   latency.py, throughput.py, imbalance.py
-config/       runtime_rules.py
-data/         synthetic.py, dataset_generator.py, load_graph.py
-              (data/Cora, data/DBLP, data/PubMed are auto-downloaded by PyG; git-ignored)
-dashboard/    app.py  (Streamlit dashboard)
-experiments/  run_experiment.py, results/
-results/      CSV outputs of the experiment scripts
-checkpoints/  best_graphsage_model.pt  (0 bytes; empty, not used)
+graph/csr.py            CSR graph (vertices 0..n-1)
+graph/metrics.py        edge cut, communication volume, imbalance, skew (single source of truth)
+graph/partitioners.py   METIS (pymetis), KL, LDG, FENNEL, Hash, LP refinement, LDG placement
+runtime/acgr.py         ACGR: incremental numba kernel + legacy networkx API
+runtime/bsp_executor.py executor, allocate_threads (THREAD_ADJUST policy)
+runtime/environment.py  AdaptiveRuntime, CostModel, platforms, oracle look-ahead
+data/graphs.py          dataset loaders with an .npz cache (data/cache, git-ignored)
+data/dynamic_stream.py  TemporalStream (SNAP sx-mathoverflow), SyntheticStream, materialize()
+experiments/            calibrate (E4), e1_partition_quality, e3_dynamic, dataset_stats, plots
+tests/                  pytest suite (ACGR incremental == full recompute, executor == scipy)
+paper/                  LNCS source; refs.bib is generated from Crossref by make_bib.py
 ```
 
-There are also ~35 `test_*.py` files in the root. **They are standalone scripts, not pytest tests.** Several run work at import time (for example, `test_training.py` trains a model), so do not run `pytest` across the repo.
+## 4. Environment notes
 
----
+- Use the `.venv` virtual environment. It was created with `--system-site-packages` so that it
+  reuses the global torch 2.8.
+- **pymetis** has no Windows wheel on PyPI. Install `vendor/pymetis-*.whl`, a patched MSVC
+  build; `vendor/README.md` lists the patches.
+- **LaTeX**: compile with `powershell -File paper/build.ps1`, which uses TinyTeX in
+  `tools/tinytex` (the TinyTeX-v2026.11 zip from GitHub, with `tlmgr install aliascnt
+  algorithms algorithmicx multirow booktabs`). Tectonic could not reach its package server from
+  this network. `tools/` is git-ignored, so download TinyTeX again if it is missing. Overleaf
+  also works: upload the `paper/` folder.
+- Do not run timing experiments (E1, E3, E4) while other heavy jobs are running.
 
-## 3. Setup and running
+## 5. Status of the revision
 
-The original environment used **Python 3.13** on Windows.
+The revision was completed on 2026-11-21.
+- **Paper:** `paper/main.pdf`, 15 pages, LNCS.
+- **Response letter:** `paper/response_to_reviewers.md`.
+- **Number macros:** every result number in the text is a macro in `paper/numbers.tex`, which is
+  generated from `results/`.
 
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-pip install streamlit plotly          # only needed for the dashboard (not in requirements.txt)
-python verify_install.py
-```
+Main results:
+- **E1 (partition quality):** from streaming partitions, ACGR beats label-propagation
+  refinement on the sparse graphs (about 40% cut reduction on PubMed). METIS from scratch stays
+  better, and on the dense sx-mathoverflow graph local refinement gains little.
+- **E2 (decision quality):** the learned controllers have about 25% lower regret than the tuned
+  threshold rule. They select REBALANCE but never REPARTITION.
+- **E3 (end-to-end time):**
+  - The learned controller is on par with Always-TA and the threshold rule (4.3% from the best
+    deployable policy on average), and is not the best in any scenario.
+  - Periodic METIS wins on the real stream, and Always-TA wins on PubMed.
+  - MPC loses everywhere because of its speculative overhead.
+- **Iteration:** the first iteration, trained on regime streams only, never repartitioned at
+  all; it is archived in `results/iteration1/`. The second iteration added the synthetic
+  interaction streams.
 
-**Run every script from the repo root.** Imports and paths are relative to it.
+**Open problem:** learning *when to repartition globally*. On the real stream the oracle uses
+REBALANCE and REPARTITION and is up to 14% faster than GraphSAGE.
 
-| Goal | Command | Output |
-|---|---|---|
-| Train controller + metrics | `python test_training.py` | `gnn/checkpoints/best_graphsage_model.pth`, `model_metrics.json`, `training_history.json` |
-| Pipeline on Cora/DBLP/PubMed | `python run_all_experiments.py` | `results/runtime_results.csv` |
-| Rule-based vs GraphSAGE (5 runs) | `python run_fair_comparison.py` | `results/fair_comparison.csv` |
-| Static / Rule / GraphSAGE / GraphSAGE+ACGR | `python run_execution_benchmark.py` | `results/execution_benchmark.csv` |
-| Baseline comparison | `python run_baseline_comparison.py` | `results/baseline_comparison.csv` |
-| Repeated adaptive-vs-static benchmark | `python test_adaptive_comparison.py` | `gnn_adaptgraph_results.csv` |
-| ACGR validation | `python validate_acgr.py` | console |
-| Dashboard | `streamlit run dashboard/app.py` | browser |
-| Simple entry point | `python run.py [--dataset synthetic\|dblp]` | **currently broken, see §4** |
+**Measurement note:** the laptop has 8 GB of RAM. Close memory-heavy applications before running
+timing experiments. E3 uses medians, because paging once caused 100-second stalls in single runs.
 
-The first run of any real-dataset script downloads the dataset into `data/<Name>/`.
+## 6. Known limitations
 
----
-
-## 4. Known issues and open problems
-
-Listed roughly by priority.
-
-1. **`run.py` crashes in both modes.**
-   - `run_synthetic()` calls `RuntimeController()` without the required `checkpoint` argument, which raises a `TypeError`. Fix: `RuntimeController("gnn/checkpoints/best_graphsage_model.pth")`.
-   - `run_dblp()` treats the return value of `load_dblp()` as a PyG `Data` object (`data.num_nodes`, `data.edge_index`). It is actually a **NetworkX graph**, so this raises an `AttributeError`. Use `G.number_of_nodes()` / `G.number_of_edges()`, or better, run it through `RuntimePipeline` the way `run_all_experiments.py` does.
-2. **`main.py` and `README.md` are empty.**
-3. **Training and inference use different code paths.**
-   - Training (`gnn/graph_dataset.py`) uses `runtime/partition_manager.py` (static, `seed=42`) and `runtime/partition_graph.py`.
-   - Inference (`controller/runtime_pipeline.py` and the run scripts) uses `graph/partition_manager.py` (no seed, so results are non-deterministic) and `graph/communication_graph.py`.
-
-   There are also two feature extractors (`monitor/` and `graph/`). Check that these produce the same output, or merge them into one implementation.
-4. **Feature issues.** Features 2 and 6 are identical (`len(partition)/total_nodes`). Feature 7 (boundary edge count) and feature 5 (avg degree) are **not normalised**. The model is trained on graphs with 100 to 300 nodes but tested on Cora (2.7k), DBLP (4k) and PubMed (19.7k), so this is a large distribution shift. It probably explains why the controller predicts `REBALANCE` for almost every partition on the real datasets (see `results/fair_comparison.csv`).
-5. **`ExecutionEngine` ignores the actions.** Every method does the same Python traversal of intra-partition edges. Runtime differences between Static, Rule-Based and GraphSAGE are timing noise; only ACGR (which really changes the partitions) affects the work done. `THREAD_ADJUST` is not implemented as real parallelism; `test_adaptive_comparison.py` says this explicitly. A real executor (multiprocessing or a native graph library) is needed before any speedup claims hold.
-6. **The throughput column labelled "MTEPS" is raw edges/second**, not millions. Divide by 1e6.
-7. **`run_execution_benchmark.py` has `RUNS = 1`**, so every std is 0. Increase it for paper-quality numbers.
-8. **Hard-coded Windows paths** (`".\\gnn\\checkpoints\\..."`, `".\\results\\..."`) in the run scripts break on Linux/macOS. Switch to `os.path.join` / `pathlib`.
-9. `checkpoints/best_graphsage_model.pt` is an empty file. The real checkpoint is `gnn/checkpoints/best_graphsage_model.pth`.
-10. The dashboard depends on `streamlit` and `plotly`, which are missing from `requirements.txt`.
-
----
-
-## 5. Suggested next steps
-
-1. Fix `run.py` (§4.1) so there is one working entry point. Consider making `main.py` that entry point or deleting it.
-2. Merge the duplicate partition, feature and communication-graph modules into one path, used by both training and inference.
-3. Normalise the features (or train on graphs of realistic size), then retrain and re-check the action distribution on Cora, DBLP and PubMed.
-4. Implement real per-action execution (thread/process pools for `THREAD_ADJUST`), then rerun the benchmarks with ≥5 measured runs.
-5. Fill in `README.md` with a short summary and quick-start (this file can serve as the source).
-
----
-
-## 6. Latest results snapshot (`results/`)
-
-- `fair_comparison.csv`: Rule-Based and GraphSAGE choose `REBALANCE` for all partitions on Cora and DBLP. On PubMed, GraphSAGE gives a mixed split (8 NO_ACTION / 4 THREAD_ADJUST / 8 REBALANCE across 5 runs).
-- `execution_benchmark.csv`: GraphSAGE + ACGR is fastest on Cora and DBLP. Treat this with caution because of §4.5 and §4.7.
+- Execution is measured on one 6-core laptop. The 10g and 1g platforms emulate network cost
+  analytically; there is no real cluster.
+- Labels depend on the calibrated cost model. A new machine needs a new calibration and
+  retraining.
+- The oracle uses a fixed NO_ACTION continuation over H windows. This is a one-step
+  look-ahead, not a full planner.
+- ACGR is a greedy single-vertex refiner. On dense power-law graphs (sx-mathoverflow) it gains
+  much less than METIS.

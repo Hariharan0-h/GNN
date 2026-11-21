@@ -1,0 +1,68 @@
+\section{System Model and Problem Formulation}\label{sec:model}
+
+\paragraph{Dynamic graph and workload.}
+The input is a stream of windows $t=1,\dots,T$. Window $t$ inserts and deletes edges and
+vertices, which yields the graph $G_t=(V_t,E_t)$, and it marks a set of \emph{touched} vertices
+(endpoints of new interactions). As in incremental GNN inference, the active set $A_t$ (the
+touched vertices and their neighbours) is recomputed in every window by $S$ supersteps of a
+GraphSAGE-style layer
+\begin{equation}\label{eq:layer}
+  h_v \leftarrow \tanh\Big(\tfrac{1}{|N(v)|}\textstyle\sum_{u\in N(v)} h_u \; W\Big), \qquad v\in A_t,
+\end{equation}
+with $F$-dimensional states ($F=64$). Recomputing $v$ costs $w_v=\deg(v)+F$ units of work
+(aggregation plus dense transform), so the work of partition $P_i$ is
+$W_i=\sum_{v\in P_i\cap A_t} w_v$, and it changes from window to window.
+
+\paragraph{Execution model.}
+The vertex set is split into $k$ disjoint partitions $P_1,\dots,P_k$
+($\bigcup_i P_i=V_t$, $P_i\cap P_j=\emptyset$). Each partition is a bulk-synchronous worker
+\cite{malewicz2010pregel} that owns its vertices and keeps read-only ghost copies of remote
+neighbours. Partition $i$ has $\tau_i$ threads from a fixed budget $\sum_i\tau_i=T_{\mathrm{thr}}$.
+A superstep consists of local computation, a barrier, and a halo exchange that refreshes the
+ghosts of changed (active) vertices. Its time is governed by the slowest partition and by the
+communication volume
+\begin{equation}\label{eq:cv}
+  \mathrm{CV} = \sum_{v} \big|\{P(u): u\in N(v)\}\setminus\{P(v)\}\big|,
+\end{equation}
+the number of ghost copies \cite{hendrickson2000models}. Unlike the number of ``boundary
+edges'', which always equals twice the edge cut, CV counts each value once per receiving
+partition.
+
+\paragraph{Platforms.}
+The executor runs on one multicore machine, and its time is always \emph{measured}. To study
+deployments where partitions sit on different machines, we additionally emulate an
+interconnect. The halo exchange of every superstep is charged
+$\lambda\cdot\#\mathrm{msgs}+4F\cdot\mathrm{CV}_{A}/B$ (latency $\lambda$, bandwidth $B$,
+$\mathrm{CV}_A$ = ghosts of active vertices), and vertex migration is charged at $B$. We use three
+platforms: shared memory (\emph{SM}; migration at memory bandwidth, 10\,GB/s), emulated
+10\,GbE ($B=1.25$\,GB/s, $\lambda=50\,\mu$s) and emulated 1\,GbE ($B=125$\,MB/s, $\lambda=100\,\mu$s).
+
+\paragraph{Actions.}
+Before executing window $t$, the runtime applies one action $a_t\in\mathcal{A}$:
+\begin{itemize}
+  \item \NOA{} keeps the partitioning and the thread allocation.
+  \item \TA{} reallocates threads in proportion to the current work, $\tau_i\propto W_i$, with
+        $\tau_i\ge 1$ and $\sum_i \tau_i=T_{\mathrm{thr}}$. It costs about 1\,ms and migrates nothing.
+  \item \RB{} runs ACGR (Sect.~\ref{sec:acgr}), a local, communication-aware refinement that
+        migrates few vertices, and then re-provisions the threads.
+  \item \RP{} runs METIS \cite{karypis1998metis} from scratch, relabels the new parts to maximise
+        their overlap with the old ones (scratch-remap \cite{schloegel2000unified}), and
+        re-provisions the threads. It gives the best quality but migrates many vertices.
+\end{itemize}
+New vertices that arrive between decisions are placed online with LDG \cite{stanton2012ldg},
+so an unmaintained partitioning degrades over time.
+
+\paragraph{Objective.}
+The goal is to minimise the end-to-end time of the stream,
+\begin{equation}\label{eq:J}
+  J = \sum_{t=1}^{T} \Big( T^{\mathrm{exec}}_t + T^{\mathrm{net}}_t
+      + T^{\mathrm{adapt}}(a_t) + T^{\mathrm{mig}}(a_t) + T^{\mathrm{ctrl}}_t \Big),
+\end{equation}
+where $T^{\mathrm{exec}}$ is the measured superstep time, $T^{\mathrm{net}}$ the emulated network
+time (zero on SM), $T^{\mathrm{adapt}}$ the measured run time of ACGR or METIS,
+$T^{\mathrm{mig}}$ the migration time, and $T^{\mathrm{ctrl}}$ the controller's inference time.
+Every term is a cost in seconds and is minimised. This replaces the weighted reward of our
+earlier version, which mixed rewarded and penalised terms of different units with hand-set
+weights. Partition quality (cut, CV, balance) affects $J$ only through the time it causes, so
+no weights $w_1,\dots,w_4$ have to be chosen. The trade-off the controller must learn is
+explicit in~\eqref{eq:J}: adapting costs time now and saves time later.

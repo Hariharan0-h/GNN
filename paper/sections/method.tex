@@ -1,0 +1,136 @@
+\section{GNN-AdaptGraph}\label{sec:method}
+
+Fig.~\ref{fig:arch} shows the adaptation loop. The controller decides \emph{when} and
+\emph{how strongly} to adapt. THREAD\_ADJUST, ACGR and METIS decide \emph{how}.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+  node distance=3.5mm and 4mm,
+  box/.style={draw=black!45, rounded corners=2pt, align=center, font=\scriptsize,
+              minimum height=8.5mm, inner sep=2.5pt, fill=black!3},
+  act/.style={draw=black!45, rounded corners=2pt, align=left, font=\scriptsize, inner sep=3pt, fill=white},
+  arr/.style={-{Stealth[length=1.6mm]}, black!70, semithick}]
+  \node[box, text width=15mm] (stream) {Window $t$\\$\Delta E_t$, touched};
+  \node[box, right=of stream, text width=17mm] (ingest) {Ingest\\(LDG places\\new vertices)};
+  \node[box, right=of ingest, text width=19mm] (monitor) {Monitor\\8 partition + 3\\global features};
+  \node[box, right=of monitor, text width=19mm, fill=blue!6, draw=blue!50] (ctrl) {GraphSAGE\\controller on the\\comm.\ graph};
+  \node[act, below=6mm of ctrl, text width=40mm] (acts) {%
+    \NOA{}: keep configuration\\
+    \TA{}: $\tau_i \propto W_i$ (no migration)\\
+    \RB{}: ACGR local refinement\\
+    \RP{}: METIS scratch-remap};
+  \node[box, left=10mm of acts, text width=32mm] (exec) {BSP executor: per-partition\\thread pools, $S$ supersteps,\\halo exchange of active ghosts};
+  \draw[arr] (stream) -- (ingest);
+  \draw[arr] (ingest) -- (monitor);
+  \draw[arr] (monitor) -- (ctrl);
+  \draw[arr] (ctrl) -- node[right, font=\scriptsize] {$a_t$} (acts);
+  \draw[arr] (acts) -- (exec);
+  \draw[arr] (exec.west) -| node[pos=0.25, below, font=\scriptsize] {next window} (stream.south);
+\end{tikzpicture}
+\caption{Adaptation loop of GNN-AdaptGraph. Each window is ingested, monitored and
+classified by the controller. The chosen action is applied before the window is executed.}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Runtime State}
+The state is the \emph{communication graph} of the current partitioning: one node per
+partition, and an edge between two partitions that share cut edges. Each node $i$ carries
+eight scale-free features:
+\begin{enumerate}
+  \item load share $W_i/\bar W$;
+  \item thread pressure $(W_i/\tau_i)/\overline{(W/\tau)}$;
+  \item ghost ratio $g_i/|P_i|$;
+  \item cut ratio $c_i/e_i$;
+  \item cut drift $c_i/e_i-c^0_i$ since the last (re)partitioning;
+  \item load volatility $|W_i/\bar W-(W_i/\bar W)_{t-1}|$;
+  \item size share $|P_i|k/|V|$;
+  \item active fraction $|P_i\cap A_t|/|P_i|$.
+\end{enumerate}
+Here $g_i$ is the number of ghosts held by $P_i$, $c_i$ the number of its cut edges and $e_i$
+the number of its incident edges. (The unnormalised features of our first version did not
+generalise across graph sizes.) Three global features are broadcast to every node: the work
+scale $\log_{10}(1+\sum_i W_i)/7$, the fraction of the window spent communicating, and
+$\log_{10}(1+10^3 T_{\mathrm{window}})/4$. They tell the controller how much time is at stake
+and whether the platform is compute-bound or communication-bound.
+
+\subsection{GraphSAGE Controller}
+The controller $f_\theta$ applies two GraphSAGE layers \cite{hamilton2017graphsage} with the
+mean aggregator,
+\begin{equation}
+  h^{(l)}_{\mathcal{N}(i)} = \tfrac{1}{|\mathcal{N}(i)|}\textstyle\sum_{j\in\mathcal{N}(i)} h^{(l-1)}_j, \qquad
+  h^{(l)}_i = \sigma\big(W^{(l)}[\,h^{(l-1)}_i \,\Vert\, h^{(l)}_{\mathcal{N}(i)}\,]\big),
+\end{equation}
+over the communication graph (input dimension 11, hidden dimension 64, batch normalisation,
+a residual connection between the layers). A mean$\Vert$max readout pools the partition
+embeddings into a graph embedding $z_t$, and an MLP ($128\!\to\!32\!\to\!4$, dropout 0.3) outputs
+one logit per action: $a_t=\arg\max_a f_\theta(z_t)_a$. The model has 14{,}244 parameters.
+As an ablation we replace the GraphSAGE layers with per-partition linear layers (MLP
+controller, 9{,}444 parameters). This isolates the contribution of neighbourhood aggregation.
+
+\subsection{Outcome-Based Labels and Cost-Sensitive Training}\label{sec:labels}
+Our earlier controller was trained to imitate a hand-written threshold rule, so it could not
+learn anything the rule did not already encode. The revised controller learns from the
+\emph{outcomes} of actions. For a state at window $t$, a look-ahead oracle evaluates every
+action $a\in\mathcal{A}$:
+\begin{equation}\label{eq:oracle}
+  J_H(a) = T^{\mathrm{adapt}}(a)+T^{\mathrm{mig}}(a) + \sum_{h=0}^{H-1} \hat T_{t+h}\big(\text{$a$ at $t$, \NOA{} afterwards}\big),
+\end{equation}
+where $\hat T$ is the predicted window time (execution plus network) and $H=8$. The label is
+$a^\star_t=\arg\min_a J_H(a)$. Because the graph stream does not depend on the actions, the
+look-ahead replays exactly the windows that will follow. $\hat T$ comes from a cost model
+calibrated on the real executor (Sect.~\ref{sec:executor}):
+\begin{equation}\label{eq:cost}
+  \hat T^{\mathrm{exec}} = S\big(c_0 + c_1 \max_i W_i/s(\tau_i) + c_2\,\mathrm{CV}_A\big),
+\end{equation}
+where $s(\tau)$ is the measured parallel speedup with $\tau$ threads. Every sample stores
+$J_H(a)$ for all four actions, so we train with the expected regret of the predicted action
+distribution, which is the quantity the system cares about:
+\begin{equation}\label{eq:loss}
+  \mathcal{L}(\theta) = \mathbb{E}_{s}\Big[\textstyle\sum_{a} \pi_\theta(a\,|\,s)\,\big(J_H(a)/J_H(a^\star)-1\big)\Big]
+  + 0.1\,\mathrm{CE}\big(\pi_\theta(\cdot\,|\,s), a^\star\big).
+\end{equation}
+Cross-entropy treats all errors alike, although their costs differ by orders of magnitude.
+Triggering METIS when \NOA{} would have been best costs far more than the reverse mistake.
+Loss~\eqref{eq:loss} optimises the decision cost directly. In our data, class-weighted
+cross-entropy reaches a similar test regret ($\CEregret\pm\CEregretStd$\% vs.\
+$\GSregret\pm\GSregretStd$\%, Sect.~\ref{sec:results}). Training states come from an $\varepsilon$-greedy oracle behaviour policy
+($\varepsilon=0.3$), so that states off the oracle's path are also covered.
+
+\subsection{ACGR: Communication-Aware Adaptive Graph Repartitioning}\label{sec:acgr}
+ACGR repairs an existing partitioning locally by migrating boundary vertices. It minimises
+\begin{equation}\label{eq:acgr}
+  C = \alpha\,\frac{\mathrm{cut}}{|E|} + \beta\,\frac{\mathrm{CV}}{2|E|}
+    + \gamma\,\max\!\big(0,\ \lambda-\epsilon\big) + \delta\,\frac{\min(\bar s,10)}{10},
+  \qquad \lambda=\frac{\max_i W_i}{\bar W}-1,
+\end{equation}
+where $\bar s$ is the mean absolute degree skewness of the partitions and
+$(\alpha,\beta,\gamma,\delta)=(0.45,0.35,0.15,0.05)$. Every term is a cost normalised to $[0,1]$,
+so lower is better. Our first version gained only one edge on Cora, and two changes fix this.
+First, the communication term now uses CV~\eqref{eq:cv}. The old boundary-edge count is
+exactly twice the cut, so it merely duplicated the $\alpha$ term. Second, imbalance within the
+tolerance $\epsilon$ is a \emph{constraint} rather than a cost, as in METIS. Penalising every
+imbalance made each move away from a balanced start look worse. A move $v: P_s\to P_t$ is
+therefore admissible only if
+\begin{equation}\label{eq:constraint}
+  W_t + w_v \le (1+\epsilon)\,\bar W \quad\text{or}\quad W_t+w_v < W_s ,
+\end{equation}
+and it is accepted only if it strictly decreases $C$.
+
+ACGR keeps, for every vertex, the number of its neighbours in each partition. A move's
+change in cut and CV then costs $O(\deg v)$ to evaluate. Its change in imbalance and skew costs
+$O(k)$, because the loads and the first three degree moments are kept per partition. Each pass
+sorts the boundary vertices by the objective change of their best admissible move. It then
+re-evaluates each move against the current state and applies it if it still improves $C$.
+A pass thus costs $O(|E|+|V|k)$. Passes repeat until no move improves $C$, up to 3 in the
+runtime and 10 in E1. The kernels are compiled with Numba \cite{lam2015numba}. Tests check
+the incremental objective against a full recomputation on 50 random graphs.
+
+\subsection{Executor and Real Thread Adjustment}\label{sec:executor}
+Each superstep runs Eq.~\eqref{eq:layer} on the active rows of every partition. A row block
+is split into $\tau_i$ chunks of equal work and executed by Numba kernels that release the
+Python GIL, on a thread pool dedicated to partition $i$. \TA{} therefore really changes the
+parallelism of a partition: the thread pools are rebuilt with the new $\tau$ (\ReconfMs\,ms).
+Exchanges copy only the values of active boundary vertices into the ghost buffers of the
+receiving partitions. The executor's output matches a sequential SciPy reference to
+$10^{-5}$ for any partitioning, thread allocation and active set.

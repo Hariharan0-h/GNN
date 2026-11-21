@@ -1,0 +1,20 @@
+\begin{abstract}
+Partition-parallel processing of dynamic graphs must adapt as the graph and its workload
+change. Every adaptation has a cost: reallocating threads, refining the partitioning locally,
+or repartitioning globally. We present GNN-AdaptGraph, an adaptive runtime in which a
+GraphSAGE controller reads the communication graph of the current partitioning and selects
+one of these actions in every window. The controller is trained on outcome-based labels
+produced by a look-ahead oracle over a cost model calibrated on the real executor.
+\mbox{ACGR}, a communication-aware local repartitioner with an explicit balance constraint and
+incremental move evaluation, implements local repair, and thread adjustment is implemented
+and measured in a partition-parallel executor. On static graphs, ACGR reduces the edge cut of
+streaming partitions by up to \EOnePubHashCutRed\% on PubMed, more than label propagation. On
+a real temporal graph (sx-mathoverflow) and on synthetic drift and hotspot streams, measured
+on three platforms with repeated runs, adaptation speeds up execution by up to
+\SpPubEightSmAlwaysTA$\times$ over static partitioning. The learned controller makes better
+per-decision choices than a tuned threshold rule. End to end, however, it performs on par with
+simple heuristics (\RobGSAGEMean\% from the best deployable policy on average) and does not learn
+when global repartitioning pays off: under steady structural drift, periodic METIS
+repartitioning wins. We analyse when each adaptation pays off and release all code and scripts.
+\keywords{Graph neural networks \and GraphSAGE \and Dynamic graph partitioning \and Repartitioning \and Runtime adaptation \and Load balancing}
+\end{abstract}

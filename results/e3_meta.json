@@ -1,0 +1,50 @@
+{
+  "args": {
+    "datasets": [
+      "sx-mathoverflow",
+      "pubmed-synth"
+    ],
+    "platforms": [
+      "sm",
+      "10g",
+      "1g"
+    ],
+    "ks": [
+      4,
+      8
+    ],
+    "seeds": 3,
+    "windows": 30,
+    "reps": 10,
+    "model_seed": 0,
+    "tag": ""
+  },
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "cpu_count": 12,
+    "python": "3.12.9",
+    "numpy": "1.26.4",
+    "scipy": "1.16.1",
+    "networkx": "3.5",
+    "numba": "0.66.0",
+    "torch": "2.8.0+cpu",
+    "torch_geometric": "2.8.1"
+  },
+  "runtime": {
+    "k": 4,
+    "total_threads": 12,
+    "feature_dim": 64,
+    "supersteps": 20,
+    "network": "sm",
+    "acgr": {
+      "alpha": 0.45,
+      "beta": 0.35,
+      "gamma": 0.15,
+      "delta": 0.05,
+      "epsilon": 0.05,
+      "max_iterations": 3
+    },
+    "seed": 0
+  }
+}

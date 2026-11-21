@@ -1,0 +1,38 @@
+\section{Introduction}
+
+GNN inference and graph analytics on large graphs run partition-parallel. Each of $k$ workers
+processes one part of the graph, and the workers exchange boundary values after every
+superstep \cite{malewicz2010pregel}. Performance depends on load balance, on communication
+volume, and on how cores are assigned to workers. METIS \cite{karypis1998metis} optimises the
+partitioning for a single snapshot, but real graphs are \emph{dynamic}
+\cite{dossantos2025landscape,zhang2026survey}. Edges and vertices arrive and expire, and the
+active region moves, so partitions develop hotspots and a growing cut. A runtime can react by
+shifting threads (cheap, but this fixes only imbalance), by refining the partitioning locally,
+or by repartitioning from scratch (best quality, but it migrates much of the graph). Which
+reaction pays off depends on whether a change is transient or persistent and on the cost of
+communication. These factors are hard to capture with fixed rules.
+
+We present \textbf{GNN-AdaptGraph}, an adaptive runtime in which a GraphSAGE controller
+\cite{hamilton2017graphsage} reads the communication graph of the current partitioning and
+decides, in every window, whether and how strongly to adapt. Compared with our earlier
+version, the controller is trained on the \emph{outcomes} of actions instead of a hand-written
+rule, the repartitioner optimises true communication volume, thread adjustment is
+implemented and measured, and the evaluation uses real dynamic graphs and established
+baselines. Our contributions are:
+\begin{itemize}
+  \item \textbf{A cost-explicit formulation of runtime adaptation} for partition-parallel
+        processing of dynamic graphs (Sect.~\ref{sec:model}). The objective is end-to-end time,
+        which includes adaptation and migration overheads, so no hand-tuned reward weights are needed.
+  \item \textbf{A GraphSAGE controller trained on outcome-based oracle labels with a
+        cost-sensitive (expected-regret) loss} (Sect.~\ref{sec:labels}). It chooses among four
+        actions of increasing cost: \NOA{}, \TA{}, \RB{} and \RP{}.
+  \item \textbf{ACGR}, a communication-aware local repartitioner with an explicit balance
+        constraint and incremental $O(\deg v)$ move evaluation (Sect.~\ref{sec:acgr}).
+  \item \textbf{A partition-parallel executor} in which \TA{} really changes per-partition
+        parallelism, and a cost model calibrated on it (held-out $R^2=\CalRtwo$).
+  \item \textbf{An evaluation} on a real temporal graph and on synthetic drift/hotspot
+        streams, against METIS, KL, LDG, FENNEL, label propagation, periodic METIS
+        repartitioning and a tuned threshold rule, on three platforms, with repeated
+        measurements and significance tests (Sect.~\ref{sec:results}). It shows when each
+        adaptation pays off and where learned control helps and where it does not.
+\end{itemize}
