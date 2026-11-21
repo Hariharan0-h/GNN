@@ -180,10 +180,11 @@ def main():
     ap.add_argument("--split-seed", type=int, default=0)
     args = ap.parse_args()
 
-    # our own locally generated file (gnn/oracle_labels.py); it holds numpy arrays, hence weights_only=False
+    from gnn.oracle_labels import load_samples  # tensors + primitives only: torch.load(weights_only=True)
+
     samples = []
     for path in args.data:
-        samples.extend(torch.load(path, weights_only=False)["samples"])
+        samples.extend(load_samples(path))
     splits = split_by_graph(samples, args.split_seed)
     counts = {k: np.bincount([s["label"] for s in v], minlength=NUM_ACTIONS).tolist() for k, v in splits.items()}
     print("split sizes:", {k: len(v) for k, v in splits.items()}, "labels:", counts)

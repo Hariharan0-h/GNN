@@ -139,8 +139,37 @@ def main():
                 labels = np.bincount([s["label"] for s in samples], minlength=4)
                 print(f"{i}/{len(jobs)} streams, {len(samples)} samples, labels={labels.tolist()}, "
                       f"{time.perf_counter() - start:.0f}s", flush=True)
-    torch.save({"samples": samples, "args": vars(args)}, args.out)
+    torch.save({"samples": [to_safe(s) for s in samples], "args": vars(args)}, args.out)
     print("saved", args.out)
+
+
+# The dataset is stored with tensors and primitive Python types only, so it can be read
+# with torch.load(weights_only=True): no pickled objects, no code execution on load.
+
+def to_safe(sample: dict) -> dict:
+    import torch
+
+    out = {}
+    for key, value in sample.items():
+        if isinstance(value, np.ndarray):
+            out[key] = torch.from_numpy(np.ascontiguousarray(value))
+        elif isinstance(value, np.generic):
+            out[key] = value.item()
+        else:
+            out[key] = value
+    return out
+
+
+def from_safe(sample: dict) -> dict:
+    import torch
+
+    return {k: (v.numpy() if isinstance(v, torch.Tensor) else v) for k, v in sample.items()}
+
+
+def load_samples(path) -> list:
+    import torch
+
+    return [from_safe(s) for s in torch.load(path, weights_only=True)["samples"]]
 
 
 if __name__ == "__main__":
